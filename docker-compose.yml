@@ -10,4 +10,9 @@ services:
       - .:/app
     environment:
       - PYTHONUNBUFFERED=1
+      - LINE_CHANNEL_ACCESS_TOKEN=${LINE_CHANNEL_ACCESS_TOKEN}
+      - LINE_CHANNEL_SECRET=${LINE_CHANNEL_SECRET}
+      - RAGFLOW_API_KEY=${RAGFLOW_API_KEY}
+      - RAGFLOW_BASE_URL=${RAGFLOW_BASE_URL}  # Default value if not set
+      - AGENT_ID=${AGENT_ID}
     restart: unless-stopped
