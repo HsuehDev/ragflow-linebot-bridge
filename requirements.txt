@@ -1,0 +1,3 @@
+ragflow-sdk==0.17.0
+line-bot-sdk==3.16.0
+fastapi==0.115.11
