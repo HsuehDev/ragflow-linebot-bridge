@@ -28,10 +28,7 @@ class RAGFlowService:
             full_response += ans.content[len(cont):]
             cont = ans.content
         
-        # 若回應數量小於等於 1，則回傳完整回應(避免預設罐頭訊息被裁切)
-        if count <= 1: return full_response
-        
-        return full_response[:count]
+        return full_response
         
 
 
