@@ -1,0 +1,13 @@
+version: "3.8"
+
+services:
+  ragflow-linebot:
+    build: .
+    container_name: ragflow-linebot
+    ports:
+      - "5050:5050"
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
