@@ -9,7 +9,6 @@ services:
     volumes:
       - .:/app
     environment:
-      - PYTHONUNBUFFERED=1
       - LINE_CHANNEL_ACCESS_TOKEN=${LINE_CHANNEL_ACCESS_TOKEN}
       - LINE_CHANNEL_SECRET=${LINE_CHANNEL_SECRET}
       - RAGFLOW_API_KEY=${RAGFLOW_API_KEY}
