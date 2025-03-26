@@ -1,6 +1,7 @@
 from typing import Generator
 from ragflow_sdk import RAGFlow, Agent
 from session_manager import SessionManager
+import re
 
 class RAGFlowService:
     def __init__(self, api_key: str, base_url: str, agent_id: str) -> None:
@@ -28,6 +29,7 @@ class RAGFlowService:
             full_response += ans.content[len(cont):]
             cont = ans.content
         
+        full_response = re.sub(r'##\d+\$\$', '', full_response)
         return full_response
         
 
