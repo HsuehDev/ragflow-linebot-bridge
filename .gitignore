@@ -1,3 +1,9 @@
 # Exclude all __pycache__ directories
 __pycache__/
 .env
+
+# Local scratch files and hardcoded config, never commit
+app/config.py
+*.ipynb
+temp.py
+.DS_Store

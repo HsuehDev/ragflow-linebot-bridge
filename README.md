@@ -1,82 +1,125 @@
-# Ragflow Agent to Linebot Connector
+# ragflow-linebot-bridge
 
-## 概述
+**English** | [繁體中文](README.zh-TW.md)
 
-這是一個將 **Ragflow Agent** 與 **Linebot** 連接的工具，旨在提供一個簡單且高效的解決方案，將 Ragflow Agent 的功能與 Linebot 的交互能力整合。此工具基於 **Docker** 技術封裝，並利用以下技術栈進行開發：
+A small bridge service that puts any [RAGFlow](https://github.com/infiniflow/ragflow) Agent behind a LINE Official Account, so people can query a knowledge base from the chat app they already use.
 
-- **FastAPI**：高效的 Web 框架，用於提供 HTTP API 接口
-- **Line-Bot-SDK**：專為開發 Line 聊天機器人提供的 SDK
-- **Ragflow-SDK**：與 Ragflow Agent 進行通信的 SDK
+It is deliberately small: three Python modules, five environment variables, one `docker compose up`.
 
-## 先決條件
+```mermaid
+sequenceDiagram
+    participant U as LINE user
+    participant L as LINE Platform
+    participant B as Bridge on FastAPI
+    participant S as SessionManager
+    participant R as RAGFlow Agent
 
-在開始之前，您需要確保以下軟體已正確安裝：
+    U->>L: sends a text message
+    L->>B: POST /callback with signature header
+    B->>B: verify signature, reject with 400 if invalid
+    B->>L: show loading animation
+    B->>S: get session for this user id
+    S-->>B: existing session or a newly created one
+    B->>R: ask with streaming enabled
+    R-->>B: answer chunks
+    B->>B: join chunks, strip citation markers, retry if empty
+    B->>L: reply using the reply token
+    L-->>U: answer
+```
 
-- **Docker**：用於容器化部署，確保您的開發環境能夠順利運行。
-- **Docker Compose**：用於定義和運行多容器 Docker 應用。
+## The problem
 
-請參考 [Docker 官方文檔](https://docs.docker.com/get-docker/) 進行安裝。
+RAGFlow lets you build a retrieval-augmented Agent and talk to it through its own web UI or its API. That is fine for whoever built the Agent, but not for everyone else, who would rather ask a question in a chat app than open another site.
 
-## 安裝與配置
+Connecting the two is mostly glue, but the glue has to get three things right:
 
-### 1. 複製 `.env.example` 並創建 `.env` 配置文件
+- **Conversation state.** A LINE webhook event is stateless; a RAGFlow Agent conversation lives in a session. Something has to map one to the other, per user.
+- **Response clean-up.** The Agent's raw output is a stream of cumulative chunks with inline citation markers, and it occasionally comes back empty. None of that should reach the user.
+- **LINE's webhook contract.** Signed requests, a reply token, and a user who is staring at the chat while the model thinks.
 
-首先，您需要複製 `.env.example` 文件並將其重命名為 `.env`，然後填寫必要的配置參數：
+This project was used for internal quick Q&A over a knowledge base in a school lab.
+
+## What it does
+
+### One conversation per user, recycled when idle
+
+[`app/session_manager.py`](app/session_manager.py) keeps a process-wide map from LINE user id to RAGFlow Agent session. The first message from a user creates a session; later messages reuse it, so follow-up questions keep their context. Every access resets a five-minute `threading.Timer`; when it fires, the session is dropped and the next message starts a fresh conversation.
+
+```mermaid
+stateDiagram-v2
+    state "No session" as NoSession
+    state "Active session" as Active
+
+    [*] --> NoSession
+    NoSession --> Active: first message creates an Agent session
+    Active --> Active: new message resets the 5 minute timer
+    Active --> NoSession: 5 minutes idle and the timer removes it
+```
+
+### Handling what the model actually returns
+
+[`app/ragflow_service.py`](app/ragflow_service.py) sits between the webhook and the RAGFlow SDK:
+
+- **Streaming.** The SDK yields the answer-so-far on every chunk. The service appends only the new tail of each chunk, then returns the complete text. An early version truncated long answers; that was removed so the full response is always sent.
+- **Citation markers.** RAGFlow embeds references as `##0$$`, `##1$$`, and so on. They mean nothing in a chat bubble, so they are stripped with a regular expression.
+- **Retries.** If the call raises or the answer comes back empty, the service waits one second and asks again, up to five attempts.
+
+These were not designed up front. The commit history shows them arriving over about a month: session expiry on day one, citation stripping a few weeks later, retries after that.
+
+### Small enough to deploy in a few minutes
+
+[`app/line_service.py`](app/line_service.py) is a single FastAPI endpoint, `POST /callback`. It verifies the `X-Line-Signature` header with the LINE SDK and returns 400 on a mismatch, triggers LINE's loading animation so the user sees that something is happening, and answers with the reply token. Configuration is entirely through environment variables, and the whole service runs as one container.
+
+## Tech stack
+
+| Piece | Version | Role |
+|---|---|---|
+| Python | 3.10 | Runtime (Docker base image) |
+| FastAPI + Uvicorn | 0.115 / 0.34 | Webhook endpoint |
+| line-bot-sdk | 3.16 (v3 API) | Signature check, loading animation, reply |
+| ragflow-sdk | 0.17 | Agent sessions and streaming answers |
+| Docker Compose | | Packaging and deployment |
+
+## How it was built
+
+I designed the structure: the split into a webhook layer, a RAGFlow service and a session manager, and how sessions are keyed and expired. Parts of the code were generated with ChatGPT and then integrated and corrected by me.
+
+## Status
+
+Written in March and April 2025 and not actively maintained since. Dependencies are pinned to the versions from that time; compatibility with newer RAGFlow releases has not been verified.
+
+## Running it
+
+You need Docker with the Compose plugin, a LINE Messaging API channel, and a reachable RAGFlow instance with an Agent already built.
 
 ```bash
+git clone https://github.com/HsuehDev/ragflow-linebot-bridge.git
+cd ragflow-linebot-bridge
 cp .env.example .env
 ```
 
-### 2. 編輯 `.env` 配置文件
+Fill in `.env`:
 
-打開 `.env` 文件並根據您的需求填入以下參數：
+| Variable | Value |
+|---|---|
+| `LINE_CHANNEL_ACCESS_TOKEN` | Channel access token from the LINE Developers console |
+| `LINE_CHANNEL_SECRET` | Channel secret from the same place |
+| `RAGFLOW_API_KEY` | API key issued by your RAGFlow instance |
+| `RAGFLOW_BASE_URL` | Base URL of RAGFlow including the port (its default API port is 9380) |
+| `AGENT_ID` | Id of the Agent to talk to |
 
-- `LINE_CHANNEL_SECRET`：Linebot 的 Channel Secret
-- `LINE_CHANNEL_ACCESS_TOKEN`：Linebot 的 Access Token
-- `RAGFLOW_API_KEY`：Ragflow API 金鑰
-- `RAGFLOW_BASE_URL` : Ragflow API URL(需加上port, ragflow 預設為9380)
-- `AGENT_ID` : Ragflow Agent ID
-
-確保所有參數都已正確設置，這是應用程序正常運行的關鍵。
-
-### 3. 啟動應用
-
-一旦 `.env` 文件配置完成，使用以下命令來構建並啟動 Docker 容器：
+Start the service:
 
 ```bash
 docker compose up --build -d
 ```
 
-該命令會執行以下操作：
+It listens on port 5050. LINE requires a public HTTPS webhook, so put it behind a reverse proxy or a tunnel such as ngrok, then set the webhook URL in the LINE Developers console to `https://<your-host>/callback`.
 
-- 構建 Docker 映像
-- 在背景運行應用服務
+Stop it with `docker compose down`.
 
-## 訪問與使用
+Never commit `.env`; it is already listed in `.gitignore`.
 
-當應用成功啟動後，您可以通過 FastAPI 提供的端點與 **Linebot** 進行交互。默認情況下，FastAPI 應用運行在端口 **5050**。您可以透過ngrok等三方內網穿透服務部署，並將url提供與Line Developer。
-  
+## License
 
-
-## 停止應用
-
-若您需要停止運行的應用，請使用以下命令：
-
-```bash
-docker compose down
-```
-
-這將停止並移除所有相關的 Docker 容器、網絡和服務。
-
-## 注意事項
-
-- **配置文件**：請仔細檢查 `.env` 配置文件中的所有參數，尤其是與 Linebot 和 Ragflow Agent 相關的 API 金鑰。
-- **端口設置**：默認情況下，FastAPI 運行在 **5050** 端口。如果需要更改端口，請在 `.env` 文件中設置 `PORT` 參數。
-- **安全性**：請勿將 `.env` 文件暴露於公共版本控制系統，確保您的 API 密鑰和 Token 受到妥善保護。
-
-
-## 開源許可
-
-本專案採用 **MIT 許可證**。
-
-此文案由ChatGPT產生。
+[MIT](LICENSE)
